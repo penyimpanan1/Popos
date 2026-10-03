@@ -1,0 +1,105 @@
+name: SPPG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure RDP
+        shell: powershell
+        run: |
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name 'fDenyTSConnections' `
+            -Value 0
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name 'UserAuthentication' `
+            -Value 1
+
+          netsh advfirewall firewall add rule `
+            name="RDP-Tailscale" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=3389
+
+          Restart-Service TermService -Force
+
+      - name: Create RDP User
+        shell: powershell
+        run: |
+          $username = "JoyWardana"
+          $password = "JoyDev@123"
+
+          $securePassword = ConvertTo-SecureString `
+            $password `
+            -AsPlainText `
+            -Force
+
+          if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
+            New-LocalUser `
+              -Name $username `
+              -Password $securePassword `
+              -AccountNeverExpires
+          }
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member $username `
+            -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member $username `
+            -ErrorAction SilentlyContinue
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i `"$installer`" /quiet /norestart" `
+            -Wait
+
+          Remove-Item $installer -Force
+
+      - name: Connect Tailscale
+        shell: powershell
+        run: |
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          $authKey = "PASTE_TAILSCALE_AUTH_KEY_DI_SINI"
+
+          & $tailscale up `
+            --authkey="$authKey" `
+            --hostname="gh-runner-$env:GITHUB_RUN_ID"
+
+          Start-Sleep -Seconds 5
+
+          Write-Host "Tailscale IPv4:"
+          & $tailscale ip -4
+
+          Write-Host "Tailscale status:"
+          & $tailscale status
+
+      - name: Keep RDP Alive
+        shell: powershell
+        run: |
+          Write-Host "RDP is ready."
+          Write-Host "Runner will remain available until the job ends."
+
+          while ($true) {
+            Start-Sleep -Seconds 60
+          }
